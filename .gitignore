@@ -61,3 +61,5 @@ checkpoints/
 
 wandb/
 trained-flux-inpaint*
+data/*
+*.jpg
