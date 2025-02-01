@@ -2,11 +2,11 @@ export MODEL_NAME="black-forest-labs/FLUX.1-dev"
 export INSTANCE_DIR="dog"
 export OUTPUT_DIR="trained-flux"
 
-python /home/pdawson/.local/lib/python3.10/site-packages/accelerate/commands/accelerate_cli.py launch --config_file accelerate_config.yaml train_flux_txt2img.py \
+python /home/pdawson/.local/lib/python3.10/site-packages/accelerate/commands/accelerate_cli.py launch --config_file accelerate_config.yaml --main_process_port 29600 train_flux_txt2img.py \
   --pretrained_model_name_or_path=$MODEL_NAME  \
   --instance_data_dir=$INSTANCE_DIR \
   --output_dir=$OUTPUT_DIR \
-  --mixed_precision="bf16" \
+  --mixed_precision="bf16" 
   --train_batch_size=1 \
   --guidance_scale=1 \
   --gradient_accumulation_steps=8 \

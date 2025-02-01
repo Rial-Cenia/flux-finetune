@@ -2,7 +2,7 @@ export MODEL_NAME="black-forest-labs/FLUX.1-dev"
 export INSTANCE_DIR="dog"
 export OUTPUT_DIR="trained-flux-inpaint"
 
-accelerate launch --config_file accelerate_config.yaml train_flux_inpaint.py \
+accelerate launch --config_file accelerate_config.yaml --main_process_port 29600 train_flux_inpaint.py \
   --pretrained_model_name_or_path=$MODEL_NAME  \
   --pretrained_inpaint_model_name_or_path="xiaozaa/flux1-fill-dev-diffusers" \
   --instance_data_dir=$INSTANCE_DIR \
@@ -19,11 +19,11 @@ accelerate launch --config_file accelerate_config.yaml train_flux_inpaint.py \
   --max_train_steps=100000 \
   --validation_epochs=2500 \
   --validation_steps=500 \
-  --seed="42" \
-  --dataroot="../data/VITON-HD"  \                  # Adjust the path to your dataset
-  --train_data_list="train_pairs.txt"  \            # Adjust the txt file to your train data list
-  --train_verification_list="subtrain_1.txt"  \     # Adjust the txt file to your train verification list
-  --validation_data_list="subtest_1.txt"  \         # Adjust the txt file to your validation data list
+  --seed="69" \
+  --dataroot="/workspace1/pdawson/tryon-scraping/dataset" \
+  --train_data_list="test_pairs.txt" \
+  --train_verification_list="verify_pairs.txt" \
+  --validation_data_list="verify_pairs.txt"\
   --height=768 \
   --width=576 \
   --max_sequence_length=512  \

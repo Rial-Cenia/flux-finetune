@@ -737,15 +737,15 @@ def main(args):
     # TODO: Create train dataset
     train_dataset = VitonHDDataset(
         dataroot_path=args.dataroot,
-        phase="test",
-        order="paired",
+        phase="train",
+        order="unpaired",
         size=(args.height, args.width),
         data_list=args.train_data_list
     )
     
     train_verification_dataset = VitonHDDataset(
         dataroot_path=args.dataroot,
-        phase="test",
+        phase="train",
         order="unpaired",
         size=(args.height, args.width),
         data_list=args.train_verification_list

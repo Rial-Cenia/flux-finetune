@@ -42,7 +42,7 @@ from torchvision import transforms
 from torchvision.transforms.functional import crop
 from tqdm.auto import tqdm
 from transformers import CLIPTextModelWithProjection, CLIPTokenizer, PretrainedConfig, T5EncoderModel, T5TokenizerFast
-from image_datasets.cp_dataset import VitonHDTestDataset
+from image_datasets.cp_dataset import VitonHDDataset
 from paser_helper import parse_args
 from src.flux.train_utils import  prepare_fill_with_mask, prepare_latents, encode_images_to_latents
 from diffusers import FluxTransformer2DModel, FluxFillPipeline
@@ -752,45 +752,46 @@ def main(args):
         )
 
     # Dataset and DataLoaders creation:
-    train_dataset = VitonHDTestDataset(
+    train_dataset = VitonHDDataset(
         dataroot_path=args.dataroot,
         phase="train",
-        order="paired",
+        order="unpaired",
         size=(args.height, args.width),
-        data_list=args.train_data_list,
+        data_list=args.train_data_list
     )
     
-    train_verification_dataset = VitonHDTestDataset(
+    train_verification_dataset = VitonHDDataset(
         dataroot_path=args.dataroot,
         phase="train",
-        order="paired",
+        order="unpaired",
         size=(args.height, args.width),
-        data_list=args.train_verification_list,
+        data_list=args.train_verification_list
     )
     
-    validation_dataset = VitonHDTestDataset(
+    validation_dataset = VitonHDDataset(
         dataroot_path=args.dataroot,
         phase="test",
-        order="paired",
+        order="unpaired",
         size=(args.height, args.width),
-        data_list=args.validation_data_list,
+        data_list=args.validation_data_list
     )
+
 
     train_dataloader = torch.utils.data.DataLoader(
         train_dataset,
-        shuffle=False,
+        shuffle=True,
         batch_size=args.train_batch_size,
     )
     
     train_verification_dataloader = torch.utils.data.DataLoader(
         train_verification_dataset,
-        shuffle=False,
+        shuffle=True,
         batch_size=args.train_batch_size,
     )
     
     validation_dataloader = torch.utils.data.DataLoader(
         validation_dataset,
-        shuffle=False,
+        shuffle=True,
         batch_size=args.train_batch_size,
     )
 
@@ -930,21 +931,14 @@ def main(args):
                 # vae_scale_factor = 2 ** (len(vae.config.block_out_channels))
                 batch_size = batch["image"].shape[0]
                 pixel_values = batch["image"].to(dtype=vae.dtype)
-                # prompts = batch["caption_cloth"]
-                prompts = [""
-                    f"The pair of images highlights a clothing and its styling on a model, high resolution, 4K, 8K; "
-                    f"[IMAGE1] Detailed product shot of a clothing"
-                    f"[IMAGE2] The same cloth is worn by a model in a lifestyle setting."
-                    # "[IMAGE1] A sleek black long-sleeved top is displayed against a neutral backdrop, featuring distinctive elbow pads, "
-                    # "a classic round neckline, and a cropped silhouette that combines 90s-inspired design with modern minimalism. "
-                    # "The garment showcases clean lines and a fitted cut, embracing realistic body proportions; "
-                    # "[IMAGE2] The same top is worn by a model in a lifestyle setting, where the versatile black fabric drapes naturally, "
-                    # "emphasizing its superflat construction and thin material. The styling creates a retro-contemporary fusion, "
-                    # "reminiscent of 60s fashion while maintaining a timeless cloud jumper aesthetic, all captured in a sophisticated black box presentation."
-                ] * len(pixel_values)
-                # prompts = ["upperbody"] * len(pixel_values)
+                prompts = batch["prompt"]
+                #prompts = [""
+                #    f"The pair of images highlights a clothing and its styling on a model, high resolution, 4K, 8K; "
+                #    f"[IMAGE1] Detailed product shot of a clothing"
+                #    f"[IMAGE2] The same cloth is worn by a model in a lifestyle setting."
+                #] * len(pixel_values)
 
-                control_mask = batch["inpaint_mask"].to(dtype=vae.dtype)
+                control_mask  = batch["inpaint_mask"].to(dtype=vae.dtype)
                 control_image = batch["im_mask"].to(dtype=vae.dtype)
                 garment_image = batch["cloth_pure"]
                 # garment_image_0_1 = (batch["cloth_pure"] + 1.0) / 2

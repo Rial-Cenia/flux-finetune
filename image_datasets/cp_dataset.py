@@ -109,55 +109,41 @@ class VitonHDDataset(data.Dataset):
     def __getitem__(self, index):
         c_name = self.c_names[index]
         im_name = self.im_names[index]
-        #prompt = self.prompts[index]
         
+        # Cloth image
         cloth = Image.open(os.path.join(self.dataroot, self.phase, "cloth", c_name)).resize((self.width,self.height))
         cloth_pure = self.transform(cloth)
-        cloth_prompt = open(os.path.join(self.dataroot, self.phase, "cloth", c_name + ".txt")).read()
-       # cloth_mask = Image.open(os.path.join(self.dataroot, self.phase, "cloth-mask", c_name)).resize((self.width,self.height))
-        #cloth_mask = self.transform(cloth_mask)
         
+        # Model image
         im_pil_big = Image.open(
             os.path.join(self.dataroot, self.phase, "image", im_name)
         ).resize((self.width,self.height))
         image = self.transform(im_pil_big)
+        
+        # Prompt
+        cloth_prompt = open(os.path.join(self.dataroot, self.phase, "cloth", c_name + ".txt")).read()
         image_prompt = open(os.path.join(self.dataroot, self.phase, "image", im_name + ".txt")).read()
-
         prompt = create_prompt(image_prompt, cloth_prompt)
 
-        #im_pil_big.save("test_model.jpg")
-        #cloth.save("test_cloth.jpg")
-
-        #mask = Image.open(os.path.join(self.dataroot, self.phase, "agnostic-mask", im_name.replace('.jpg','_mask.png'))).resize((self.width,self.height))
-        #mask = self.toTensor(mask)
-       # mask = mask[:1]
-        #mask = 1-mask
-        #im_mask = image * mask
- 
-        #pose_img = Image.open(
-       #     os.path.join(self.dataroot, self.phase, "image-densepose", im_name)
-       # ).resize((self.width,self.height))
-       # pose_img = self.transform(pose_img)  # [-1,1]
- 
+        # Inpaint mask
+        garment_mask = torch.zeros_like(cloth_pure)
+        full_mask = torch.cat([garment_mask, 1.0-garment_mask], dim=2) # Full screen "inpaint"
+        
+        # Save all
         result = {}
+        result["inpaint_mask"] = full_mask
         result["c_name"] = c_name
         result["im_name"] = im_name
         result["cloth_pure"] = cloth_pure
         result["prompt"] = prompt
-       # result["cloth_mask"] = cloth_mask
         
         # Concatenate image and garment along width dimension
-        #inpaint_image = torch.cat([cloth_pure, im_mask], dim=2)  # dim=2 is width dimension
-        #result["im_mask"] = inpaint_image
+        inpaint_image = torch.cat([cloth_pure, torch.zeros_like(cloth_pure)], dim=2)  # dim=2 is width dimension
+        result["im_mask"] = inpaint_image
         
         GT_image = torch.cat([cloth_pure, image], dim=2)  # dim=2 is width dimension
         result["image"] = GT_image
         
-        # Create extended black mask for garment portion
-       # garment_mask = torch.zeros_like(1-mask)  # Create mask of same size as original
-        #extended_mask = torch.cat([garment_mask, 1-mask], dim=2)  # Concatenate masks
-      #  result["inpaint_mask"] = extended_mask
-
         return result
 
     def __len__(self):
