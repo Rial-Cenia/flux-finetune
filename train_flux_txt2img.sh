@@ -18,10 +18,9 @@ python /home/pdawson/.local/lib/python3.10/site-packages/accelerate/commands/acc
   --max_train_steps=100000 \
   --validation_epochs=2500 \
   --validation_steps=500 \
-  --seed="42" \
-  --dataroot="data/VitonHD" \
+  --seed="69" \
+  --dataroot="/workspace1/pdawson/tryon-scraping/dataset" \
   --train_data_list="test_pairs.txt" \
-  --train_caption_list="test_captions.json" \
   --train_verification_list="verify_pairs.txt" \
   --validation_data_list="verify_pairs.txt"\
   --height=768 \

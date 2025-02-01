@@ -830,6 +830,9 @@ class FluxContextImg2ImgPipeline(DiffusionPipeline, FluxLoraLoaderMixin, FromSin
                 latents_dtype = latents.dtype
                 latents = self.scheduler.step(noise_pred, t, latents, return_dict=False)[0]
 
+                # Para init latents - Asignar el schedule de ruido de forma "artificial" en vez de ocupar el predecido
+                # Intuición: Se lleva de ruido puro a una imagen **predefinida** en vez de predecida por el modelo
+                # El modelo está acostumbrado a que la imagen tenga un cierto nivel de ruido a cierto timestep
                 init_latents_proper = self.scheduler.scale_noise(original_latents, torch.tensor([t]).to(device), noise)
 
                 latents = (init_latents_proper * mask) + (latents * (1 - mask))

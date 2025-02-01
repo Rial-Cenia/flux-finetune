@@ -740,31 +740,28 @@ def main(args):
         phase="test",
         order="paired",
         size=(args.height, args.width),
-        data_list=args.train_data_list,
-        caption_list = args.train_caption_list
+        data_list=args.train_data_list
     )
     
     train_verification_dataset = VitonHDDataset(
         dataroot_path=args.dataroot,
         phase="test",
-        order="paired",
+        order="unpaired",
         size=(args.height, args.width),
-        data_list=args.train_verification_list,
-        caption_list = args.train_caption_list
+        data_list=args.train_verification_list
     )
     
     validation_dataset = VitonHDDataset(
         dataroot_path=args.dataroot,
         phase="test",
-        order="paired",
+        order="unpaired",
         size=(args.height, args.width),
-        data_list=args.validation_data_list,
-        caption_list = args.train_caption_list
+        data_list=args.validation_data_list
     )
 
     train_dataloader = torch.utils.data.DataLoader(
         train_dataset,
-        shuffle=False,
+        shuffle=True,
         batch_size=args.train_batch_size,
     )
     
@@ -973,8 +970,8 @@ def main(args):
                 noisy_model_input = (1.0 - sigmas) * model_input + sigmas * noise
 
                 # keep the cloth part of the image intact, without noise
-                half_width = model_input.shape[3] // 2
-                noisy_model_input[:, :, :, :half_width] = model_input[:, :, :, :half_width]
+                #half_width = model_input.shape[3] // 2
+                #noisy_model_input[:, :, :, :half_width] = model_input[:, :, :, :half_width]
 
                 packed_noisy_model_input = FluxPipeline._pack_latents(
                     noisy_model_input,

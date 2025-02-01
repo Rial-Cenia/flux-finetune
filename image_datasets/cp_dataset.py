@@ -42,20 +42,11 @@ def tensor_to_image(tensor, image_path):
             os.makedirs(dir_path)
         img.save(image_path)
 
-def create_prompt(captions_dict):
-    p = captions_dict["person"]
-    c = captions_dict["clothing"]
-
-    if "short" in c["sleeve"]:
-        sleeve_desc = "short sleeves"
-    elif "long" in c["sleeve"]:
-        sleeve_desc = "long sleeves"
-    else:
-        sleeve_desc = c["sleeve"]
+def create_prompt(model_prompt, cloth_prompt):
 
     prompt = f"The pair of images highlights a garment and its styling on a model; "
-    prompt += f"[IMAGE1] Detailed product shot of a {c['upper cloth category']}, {c['material']}, {sleeve_desc}, {c['neckline']}; "
-    prompt += f"[IMAGE2] The same cloth is worn by a {p['body shape']} {p['gender']}, {p['tucking style']}, {p['fit of upper cloth']} fit, {p['pose']};"
+    prompt += f"[IMAGE1] {cloth_prompt};"
+    prompt += f"[IMAGE2] {model_prompt};"
 
     return prompt
 
@@ -67,8 +58,7 @@ class VitonHDDataset(data.Dataset):
         phase: Literal["train", "test"],
         order: Literal["paired", "unpaired"] = "paired",
         size: Tuple[int, int] = (512, 384),
-        data_list: Optional[str] = None,
-        caption_list: Optional[str] = None,
+        data_list: Optional[str] = None
     ):
         super(VitonHDDataset, self).__init__()
         self.dataroot = dataroot_path
@@ -97,33 +87,19 @@ class VitonHDDataset(data.Dataset):
         dataroot_names = []
         prompts = []
 
-        use_captions = caption_list is not None
-
         filename = os.path.join(dataroot_path, data_list)
-        filename_captions = os.path.join(dataroot_path, caption_list)
         
-        with open(filename_captions, "r") as f:
-            captions_dict = json.load(f)
-
         with open(filename, "r") as f:
             for line in f.readlines():
-                if phase == "train":
-                    im_name, _ = line.strip().split()
+                if order == "paired":
+                    c_name, im_name, _ = line.strip().split()
                     c_name = im_name
                 else:
-                    if order == "paired":
-                        im_name, _ = line.strip().split()
-                        c_name = im_name
-                    else:
-                        im_name, c_name = line.strip().split()
+                    c_name, im_name = line.strip().split()
 
                 im_names.append(im_name)
                 c_names.append(c_name)
-                dataroot_names.append(dataroot_path)
-                
-                raw_name = im_name.split('.')[0]
-                if use_captions:
-                    prompts.append(create_prompt(captions_dict[raw_name]))
+                dataroot_names.append(dataroot_path)                
                         
         self.im_names = im_names
         self.c_names = c_names
@@ -133,10 +109,11 @@ class VitonHDDataset(data.Dataset):
     def __getitem__(self, index):
         c_name = self.c_names[index]
         im_name = self.im_names[index]
-        prompt = self.prompts[index]
+        #prompt = self.prompts[index]
         
         cloth = Image.open(os.path.join(self.dataroot, self.phase, "cloth", c_name)).resize((self.width,self.height))
         cloth_pure = self.transform(cloth)
+        cloth_prompt = open(os.path.join(self.dataroot, self.phase, "cloth", c_name + ".txt")).read()
        # cloth_mask = Image.open(os.path.join(self.dataroot, self.phase, "cloth-mask", c_name)).resize((self.width,self.height))
         #cloth_mask = self.transform(cloth_mask)
         
@@ -144,6 +121,12 @@ class VitonHDDataset(data.Dataset):
             os.path.join(self.dataroot, self.phase, "image", im_name)
         ).resize((self.width,self.height))
         image = self.transform(im_pil_big)
+        image_prompt = open(os.path.join(self.dataroot, self.phase, "image", im_name + ".txt")).read()
+
+        prompt = create_prompt(image_prompt, cloth_prompt)
+
+        #im_pil_big.save("test_model.jpg")
+        #cloth.save("test_cloth.jpg")
 
         #mask = Image.open(os.path.join(self.dataroot, self.phase, "agnostic-mask", im_name.replace('.jpg','_mask.png'))).resize((self.width,self.height))
         #mask = self.toTensor(mask)
@@ -183,9 +166,9 @@ class VitonHDDataset(data.Dataset):
 
 
 if __name__ == "__main__":
-    dataset = VitonHDDataset("/workspace1/pdawson/catvton-flux/data/VitonHD", "test", 
-                             "paired", (512,384), "test_pairs.txt", "test_captions.json")
+    dataset = VitonHDDataset("/workspace1/pdawson/tryon-scraping/dataset", "test", 
+                             "unpaired", (512,384), "test_pairs.txt")
     
-    loader = DataLoader(dataset, batch_size=4, shuffle=False, num_workers=1)
+    loader = DataLoader(dataset, batch_size=1, shuffle=True, num_workers=1)
     for data in loader:
         pass

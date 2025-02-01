@@ -415,11 +415,6 @@ def parse_args(input_args=None):
     )
 
     parser.add_argument(
-        "--train_caption_list",
-        type=str,
-        default=None,
-    )
-    parser.add_argument(
         "--use_local_model", action='store_true', help="Load local model"
     )
     parser.add_argument(
