@@ -837,17 +837,6 @@ class FluxContextImg2ImgPipeline(DiffusionPipeline, FluxLoraLoaderMixin, FromSin
 
                 latents = (init_latents_proper * mask) + (latents * (1 - mask))
 
-                # mantener los latentes de la mitad izq intactos sin ruido
-                # 1- Pasar los latents de patches a WxH
-                #latents = self._unpack_latents(latents, height, width, self.vae_scale_factor)
-                # 2- Recuperar la parte izquierda de la imagen original
-               # h = 2 * (int(height) // (self.vae_scale_factor * 2))
-               # w = 2 * (int(width) // (self.vae_scale_factor * 2))
-               # half_width = w // 2
-              #  latents[:, :, :, :half_width] = original_latents[:, :, :, :half_width]
-                # 3- Volver a empaquetar los latents
-                #latents = self._pack_latents(latents, batch_size, num_channels_latents, h, w)
-
                 if latents.dtype != latents_dtype:
                     if torch.backends.mps.is_available():
                         # some platforms (eg. apple mps) misbehave due to a pytorch bug: https://github.com/pytorch/pytorch/pull/99272

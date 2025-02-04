@@ -181,31 +181,32 @@ def log_validation(
         control_images = []
         for batch in dataloader:
             
-            # prompt = batch['caption_cloth']
-            #prompt = [""
-           #     f"The pair of images highlights a clothing and its styling on a model, high resolution, 4K, 8K; "
-          #      f"[IMAGE1] Detailed product shot of a clothing"
-           #     f"[IMAGE2] The same cloth is worn by a model in a lifestyle setting."
-           # ] * len(batch['image'])
-            prompt = batch["prompt"]
+            prompt_detailed = batch['prompt']
+            prompt_generic = [""
+                f"The pair of images highlights a clothing and its styling on a model, high resolution, 4K, 8K; "
+                f"[IMAGE1] Detailed product shot of a clothing"
+                f"[IMAGE2] The same cloth is worn by a model."
+            ] * len(batch['image'])
+
             control_image = batch['image']             
         
             height = args.height
             width = args.width*2
             
             result = pipeline(
-                prompt=prompt,
+                prompt=prompt_generic,
+                prompt_2=prompt_detailed,
                 height=height,
                 width=width,
                 image=control_image,
                 num_inference_steps=30,
                 generator=generator,
-                guidance_scale=30,
+                guidance_scale=3.5,
                 strength=1.0
             ).images
             
             images.extend(result)
-            prompts.extend(prompt)
+            prompts.extend(prompt_detailed)
             control_images.extend(control_image)
 
     for tracker in accelerator.trackers:
@@ -352,14 +353,18 @@ def encode_prompt(
     text_encoders,
     tokenizers,
     prompt: str,
+    prompt_2: str,
     max_sequence_length,
     device=None,
     num_images_per_prompt: int = 1,
     text_input_ids_list=None,
 ):
     prompt = [prompt] if isinstance(prompt, str) else prompt
+    prompt_2 = [prompt_2] if isinstance(prompt_2, str) else prompt_2
+
     dtype = text_encoders[0].dtype
     device = device if device is not None else text_encoders[1].device
+    
     pooled_prompt_embeds = _encode_prompt_with_clip(
         text_encoder=text_encoders[0],
         tokenizer=tokenizers[0],
@@ -373,7 +378,7 @@ def encode_prompt(
         text_encoder=text_encoders[1],
         tokenizer=tokenizers[1],
         max_sequence_length=max_sequence_length,
-        prompt=prompt,
+        prompt=prompt_2,
         num_images_per_prompt=num_images_per_prompt,
         device=device,
         text_input_ids=text_input_ids_list[1] if text_input_ids_list else None,
@@ -382,6 +387,7 @@ def encode_prompt(
     text_ids = torch.zeros(prompt_embeds.shape[1], 3).to(device=device, dtype=dtype)
 
     return prompt_embeds, pooled_prompt_embeds, text_ids
+
 
 
 def main(args):
@@ -481,7 +487,7 @@ def main(args):
     vae_scale_factor = (
         2 ** (len(vae.config.block_out_channels) - 1) if vae is not None else 8
     )
-    image_processor = VaeImageProcessor(vae_scale_factor=vae_scale_factor, do_resize=True, do_convert_rgb=True, do_normalize=True)
+    #image_processor = VaeImageProcessor(vae_scale_factor=vae_scale_factor, do_resize=True, do_convert_rgb=True, do_normalize=True)
     transformer = FluxTransformer2DModel.from_pretrained(
         args.pretrained_model_name_or_path, revision=args.revision, variant=args.variant, subfolder="transformer"
     )
@@ -734,7 +740,6 @@ def main(args):
         )
 
     # Dataset and DataLoaders creation:
-    # TODO: Create train dataset
     train_dataset = VitonHDDataset(
         dataroot_path=args.dataroot,
         phase="train",
@@ -780,10 +785,10 @@ def main(args):
     tokenizers = [tokenizer_one, tokenizer_two]
     text_encoders = [text_encoder_one, text_encoder_two]
 
-    def compute_text_embeddings(prompt, text_encoders, tokenizers):
+    def compute_text_embeddings(prompt, prompt_2, text_encoders, tokenizers):
         with torch.no_grad():
             prompt_embeds, pooled_prompt_embeds, text_ids = encode_prompt(
-                text_encoders, tokenizers, prompt, args.max_sequence_length
+                text_encoders, tokenizers, prompt, prompt_2, args.max_sequence_length
             )
             prompt_embeds = prompt_embeds.to(accelerator.device)
             pooled_prompt_embeds = pooled_prompt_embeds.to(accelerator.device)
@@ -915,27 +920,28 @@ def main(args):
 
                 # Contiene garment y imagen GT de modelo concatenada
                 pixel_values = batch["image"].to(dtype=vae.dtype)
-                prompts = batch["prompt"]
-                #prompts = [""
-                #    f"The pair of images highlights a clothing and its styling on a model, high resolution, 4K, 8K; "
-                #    f"[IMAGE1] Detailed product shot of a clothing"
-                #    f"[IMAGE2] The same cloth is worn by a model in a lifestyle setting."
-                #] * len(pixel_values)
-                # prompts = ["upperbody"] * len(pixel_values)
+
+                prompts_specific = batch["prompt"]
+                prompts_generic = [""
+                    f"The pair of images highlights a garment and its styling on a model; "
+                    f"[IMAGE1] Detailed product shot of a garment;"
+                    f"[IMAGE2] The same cloth is worn by a model;"
+                ] * len(pixel_values)
+
 
                 garment_image = batch["cloth_pure"]
                 garment_image = garment_image.to(dtype=vae.dtype)
                                 
                 # encode batch prompts when custom prompts are provided for each image -
                 prompt_embeds, pooled_prompt_embeds, text_ids = compute_text_embeddings(
-                    prompts, text_encoders, tokenizers
+                    prompts_generic, prompts_specific, text_encoders, tokenizers
                 )
                 
                 
                 # TODO: controlnet dropout might cause instability, need to run more experiments
-                if args.dropout_prob > 0:
-                    dropout = torch.nn.Dropout(p=args.dropout_prob)
-                    inpaint_cond = dropout(inpaint_cond)
+                #if args.dropout_prob > 0:
+                #    dropout = torch.nn.Dropout(p=args.dropout_prob)
+                #    inpaint_cond = dropout(inpaint_cond)
 
                 model_input = encode_images_to_latents(vae, pixel_values, weight_dtype, args.height, args.width*2)
                 
@@ -968,10 +974,6 @@ def main(args):
                 # zt = (1 - texp) * x + texp * z1
                 sigmas = get_sigmas(timesteps, n_dim=model_input.ndim, dtype=model_input.dtype)
                 noisy_model_input = (1.0 - sigmas) * model_input + sigmas * noise
-
-                # keep the cloth part of the image intact, without noise
-                #half_width = model_input.shape[3] // 2
-                #noisy_model_input[:, :, :, :half_width] = model_input[:, :, :, :half_width]
 
                 packed_noisy_model_input = FluxPipeline._pack_latents(
                     noisy_model_input,

@@ -182,38 +182,34 @@ def log_validation(
         control_masks = []
         for batch in dataloader:
             
-            # prompt = batch['caption_cloth']
-            prompt = [""
+            prompt_detailed = batch['prompt']
+            prompt_generic = [""
                 f"The pair of images highlights a clothing and its styling on a model, high resolution, 4K, 8K; "
                 f"[IMAGE1] Detailed product shot of a clothing"
-                f"[IMAGE2] The same cloth is worn by a model in a lifestyle setting."
-                # "[IMAGE1] A sleek black long-sleeved top is displayed against a neutral backdrop, featuring distinctive elbow pads, "
-                # "a classic round neckline, and a cropped silhouette that combines 90s-inspired design with modern minimalism. "
-                # "The garment showcases clean lines and a fitted cut, embracing realistic body proportions; "
-                # "[IMAGE2] The same top is worn by a model in a lifestyle setting, where the versatile black fabric drapes naturally, "
-                # "emphasizing its superflat construction and thin material. The styling creates a retro-contemporary fusion, "
-                # "reminiscent of 60s fashion while maintaining a timeless cloud jumper aesthetic, all captured in a sophisticated black box presentation."
+                f"[IMAGE2] The same cloth is worn by a model."
             ] * len(batch['image'])
-            control_image = batch['image'] 
-            control_mask = batch['inpaint_mask']
+
+            control_image = batch['image'].to(dtype=pipeline.dtype)
+            control_mask = batch['inpaint_mask'].to(dtype=pipeline.dtype)
             
         
             height = args.height
             width = args.width*2
             
             result = pipeline(
-                prompt=prompt,
+                prompt=prompt_generic,
+                prompt_2=prompt_detailed,
                 height=height,
                 width=width,
                 image=control_image,
                 mask_image=control_mask,
                 num_inference_steps=28,
                 generator=generator,
-                guidance_scale=30,
+                guidance_scale=3.5,
             ).images
             
             images.extend(result)
-            prompts.extend(prompt)
+            prompts.extend(prompt_detailed)
             control_images.extend(control_image)
             control_masks.extend(control_mask)
 
@@ -361,14 +357,18 @@ def encode_prompt(
     text_encoders,
     tokenizers,
     prompt: str,
+    prompt_2: str,
     max_sequence_length,
     device=None,
     num_images_per_prompt: int = 1,
     text_input_ids_list=None,
 ):
     prompt = [prompt] if isinstance(prompt, str) else prompt
+    prompt_2 = [prompt_2] if isinstance(prompt_2, str) else prompt_2
+
     dtype = text_encoders[0].dtype
     device = device if device is not None else text_encoders[1].device
+    
     pooled_prompt_embeds = _encode_prompt_with_clip(
         text_encoder=text_encoders[0],
         tokenizer=tokenizers[0],
@@ -382,7 +382,7 @@ def encode_prompt(
         text_encoder=text_encoders[1],
         tokenizer=tokenizers[1],
         max_sequence_length=max_sequence_length,
-        prompt=prompt,
+        prompt=prompt_2,
         num_images_per_prompt=num_images_per_prompt,
         device=device,
         text_input_ids=text_input_ids_list[1] if text_input_ids_list else None,
@@ -754,11 +754,23 @@ def main(args):
     # Dataset and DataLoaders creation:
     train_dataset = VitonHDDataset(
         dataroot_path=args.dataroot,
-        phase="train",
+        phase="train", 
         order="unpaired",
         size=(args.height, args.width),
         data_list=args.train_data_list
     )
+
+    # Load test dataset
+    test_dataset = VitonHDDataset(
+        dataroot_path=args.dataroot,
+        phase="test",
+        order="unpaired", 
+        size=(args.height, args.width),  
+        data_list=args.test_data_list
+    )
+
+    # Combine train and test datasets
+    train_dataset = torch.utils.data.ConcatDataset([train_dataset, test_dataset])
     
     train_verification_dataset = VitonHDDataset(
         dataroot_path=args.dataroot,
@@ -798,10 +810,10 @@ def main(args):
     tokenizers = [tokenizer_one, tokenizer_two]
     text_encoders = [text_encoder_one, text_encoder_two]
 
-    def compute_text_embeddings(prompt, text_encoders, tokenizers):
+    def compute_text_embeddings(prompt, prompt_2, text_encoders, tokenizers):
         with torch.no_grad():
             prompt_embeds, pooled_prompt_embeds, text_ids = encode_prompt(
-                text_encoders, tokenizers, prompt, args.max_sequence_length
+                text_encoders, tokenizers, prompt, prompt_2, args.max_sequence_length
             )
             prompt_embeds = prompt_embeds.to(accelerator.device)
             pooled_prompt_embeds = pooled_prompt_embeds.to(accelerator.device)
@@ -931,12 +943,12 @@ def main(args):
                 # vae_scale_factor = 2 ** (len(vae.config.block_out_channels))
                 batch_size = batch["image"].shape[0]
                 pixel_values = batch["image"].to(dtype=vae.dtype)
-                prompts = batch["prompt"]
-                #prompts = [""
-                #    f"The pair of images highlights a clothing and its styling on a model, high resolution, 4K, 8K; "
-                #    f"[IMAGE1] Detailed product shot of a clothing"
-                #    f"[IMAGE2] The same cloth is worn by a model in a lifestyle setting."
-                #] * len(pixel_values)
+                prompts_specific = batch["prompt"]
+                prompts_generic = [""
+                    f"The pair of images highlights a garment and its styling on a model; "
+                    f"[IMAGE1] Detailed product shot of a garment;"
+                    f"[IMAGE2] The same cloth is worn by a model;"
+                ] * len(pixel_values)
 
                 control_mask  = batch["inpaint_mask"].to(dtype=vae.dtype)
                 control_image = batch["im_mask"].to(dtype=vae.dtype)
@@ -949,7 +961,7 @@ def main(args):
 
                 # encode batch prompts when custom prompts are provided for each image -
                 prompt_embeds, pooled_prompt_embeds, text_ids = compute_text_embeddings(
-                    prompts, text_encoders, tokenizers
+                    prompts_generic, prompts_specific, text_encoders, tokenizers
                 )
                 
                 inpaint_cond, _, _ = prepare_fill_with_mask(

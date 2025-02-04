@@ -13,7 +13,7 @@ accelerate launch --config_file accelerate_config.yaml --main_process_port 29600
   --gradient_accumulation_steps=8 \
   --optimizer="adamw" \
   --use_8bit_adam \
-  --learning_rate=2e-5 \
+  --learning_rate=1.5e-5 \
   --lr_scheduler="constant" \
   --lr_warmup_steps=0 \
   --max_train_steps=100000 \
@@ -21,8 +21,9 @@ accelerate launch --config_file accelerate_config.yaml --main_process_port 29600
   --validation_steps=500 \
   --seed="69" \
   --dataroot="/workspace1/pdawson/tryon-scraping/dataset" \
-  --train_data_list="test_pairs.txt" \
-  --train_verification_list="verify_pairs.txt" \
+  --train_data_list="train_pairs.txt" \
+  --test_data_list="test_pairs.txt" \
+  --train_verification_list="train_verify_pairs.txt" \
   --validation_data_list="verify_pairs.txt"\
   --height=768 \
   --width=576 \

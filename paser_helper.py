@@ -413,6 +413,11 @@ def parse_args(input_args=None):
         type=str,
         default=None,
     )
+    parser.add_argument(
+        "--test_data_list",
+        type=str,
+        default=None,
+    )
 
     parser.add_argument(
         "--use_local_model", action='store_true', help="Load local model"
