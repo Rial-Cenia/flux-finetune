@@ -182,10 +182,11 @@ def log_validation(
         for batch in dataloader:
             
             prompt_detailed = batch['prompt']
+            
             prompt_generic = [""
-                f"The pair of images highlights a clothing and its styling on a model, high resolution, 4K, 8K; "
-                f"[IMAGE1] Detailed product shot of a clothing"
-                f"[IMAGE2] The same cloth is worn by a model."
+                f"The pair of images highlights a garment and its styling on a model; "
+                f"[IMAGE1] Detailed product shot of a garment"
+                f"[IMAGE2] The same garment is worn by a model."
             ] * len(batch['image'])
 
             control_image = batch['image']             
@@ -194,14 +195,14 @@ def log_validation(
             width = args.width*2
             
             result = pipeline(
-                prompt=prompt_generic,
+                prompt=prompt_detailed,
                 prompt_2=prompt_detailed,
                 height=height,
                 width=width,
                 image=control_image,
-                num_inference_steps=30,
+                num_inference_steps=35,
                 generator=generator,
-                guidance_scale=3.5,
+                guidance_scale=5,
                 strength=1.0
             ).images
             
@@ -497,6 +498,18 @@ def main(args):
     text_encoder_one.requires_grad_(False)
     text_encoder_two.requires_grad_(False)
     
+    vital_grad_params = [
+        "transformer_blocks.0.",
+        "transformer_blocks.1.",
+        "transformer_blocks.17.",
+        "transformer_blocks.18.",
+        "single_transformer_blocks.6.",
+        "single_transformer_blocks.9.",
+        "single_transformer_blocks.34.",
+        "single_transformer_blocks.35.",
+        "single_transformer_blocks.37.",
+    ]
+
     grad_params = [
         "transformer_blocks.0.",
         "transformer_blocks.1.",
@@ -559,7 +572,7 @@ def main(args):
         transformer.requires_grad_(False)  # Set all parameters to not require gradients by default
         
         for name, param in transformer.named_parameters():
-            if any(grad_param in name for grad_param in grad_params):
+            if any(grad_param in name for grad_param in vital_grad_params):
                 if ("attn" in name):
                     param.requires_grad = True
                     print(f"Enabling gradients for: {name}")
@@ -922,19 +935,22 @@ def main(args):
                 pixel_values = batch["image"].to(dtype=vae.dtype)
 
                 prompts_specific = batch["prompt"]
-                prompts_generic = [""
-                    f"The pair of images highlights a garment and its styling on a model; "
-                    f"[IMAGE1] Detailed product shot of a garment;"
-                    f"[IMAGE2] The same cloth is worn by a model;"
-                ] * len(pixel_values)
+                #prompts_generic = [""
+                #    f"The pair of images highlights a garment and its styling on a model; "
+                #    f"[IMAGE1] Detailed product shot of a garment;"
+                #    f"[IMAGE2] The same garment is worn by a model;"
+                #] * len(pixel_values)
 
+                # 20% de las veces, tener un prompt vacío
+                if random.random() < 0.2:
+                    prompts_specific = [""] * len(prompts_specific)
 
                 garment_image = batch["cloth_pure"]
                 garment_image = garment_image.to(dtype=vae.dtype)
-                                
+                
                 # encode batch prompts when custom prompts are provided for each image -
                 prompt_embeds, pooled_prompt_embeds, text_ids = compute_text_embeddings(
-                    prompts_generic, prompts_specific, text_encoders, tokenizers
+                    prompts_specific, prompts_specific, text_encoders, tokenizers
                 )
                 
                 

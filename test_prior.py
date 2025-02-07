@@ -13,7 +13,7 @@ def create_prompt(model_prompt, cloth_prompt):
 
 prompt_generic = f"The pair of images highlights a garment and its styling on a model; [IMAGE1] Detailed product shot of a garment; [IMAGE2] The same cloth is worn by a model;"
                 
-device = "cuda:4"
+device = "cuda:2"
 weight_dtype = torch.bfloat16
 
 transformer = FluxTransformer2DModel.from_pretrained(
@@ -31,7 +31,7 @@ print("pipe loaded fine bro")
 
 size = (768, 1024)
 
-test_cloth = np.array(load_image("/workspace1/pdawson/tryon-finetune/wolfram/cargo.png"))
+test_cloth = np.array(load_image("inputs/dreees.jpeg"))
 target_ratio = size[1] / size[0]
 current_ratio = test_cloth.shape[0] / test_cloth.shape[1]
 
@@ -49,13 +49,15 @@ else:
     test_cloth = np.pad(test_cloth, ((0, 0), (pad_left, pad_right), (0, 0)), mode='constant', constant_values=255)
 
 test_cloth = Image.fromarray(test_cloth).resize(size)
+prior_image = np.array(Image.open("inputs/model.jpg").resize(size))
 test_cloth = np.array(test_cloth)
-model_input = np.column_stack([test_cloth, np.ones_like(test_cloth)*255])
+#prior = np.ones_like(test_cloth)*255
+model_input = np.column_stack([test_cloth, prior_image])
 model_input = Image.fromarray(model_input)
 model_input.save("model_input.png")
 
-cloth_prompt = "Cargo pants"
-model_prompt = "Man in front of a clean white background"
+cloth_prompt = "Belted shirt dress"
+model_prompt = "Women in front of a clean white background"
 prompt_detailed = create_prompt(model_prompt, cloth_prompt)
 #prompt_detailed = prompt_generic
 print(prompt_detailed)
@@ -72,4 +74,4 @@ result = pipe(
         joint_attention_kwargs={"scale": 0.8}
 ).images
 
-result[0].save("/workspace1/pdawson/tryon-finetune/cargo.png")
+result[0].save("/workspace1/pdawson/tryon-finetune/beltdress-1.0.png")

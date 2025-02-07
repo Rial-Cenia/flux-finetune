@@ -58,7 +58,8 @@ class VitonHDDataset(data.Dataset):
         phase: Literal["train", "test"],
         order: Literal["paired", "unpaired"] = "paired",
         size: Tuple[int, int] = (512, 384),
-        data_list: Optional[str] = None
+        data_list: Optional[str] = None,
+        captions_path: Optional[str] = None,
     ):
         super(VitonHDDataset, self).__init__()
         self.dataroot = dataroot_path
@@ -66,6 +67,7 @@ class VitonHDDataset(data.Dataset):
         self.height = size[0]
         self.width = size[1]
         self.size = size
+        self.caption_path = captions_path
         # This code defines a transformation pipeline for image processing
         self.transform = transforms.Compose(
             [
