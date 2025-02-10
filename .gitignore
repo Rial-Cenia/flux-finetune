@@ -2,6 +2,16 @@
 __pycache__/
 *.py[cod]
 *$py.class
+trained-flux-txt2img/*
+trained-flux-txt2img-noprompt/*
+wolfram/*
+hard/*
+trained-pixelwave/*
+vitonhd/*
+diffuserslocal/*
+example.py
+inputs/*
+output/*
 
 # Distribution / packaging
 dist/
