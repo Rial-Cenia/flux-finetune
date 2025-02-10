@@ -29,6 +29,7 @@ pipe = FluxContextImg2ImgPipeline.from_pretrained(
 
 test_cloth = load_image("/workspace1/pdawson/tryon-scraping/dataset/test/cloth/d80d5841899a4eb8850a8a7a6df901de32cf51c5.jpg")
 
+size = (768, 1152)
 test_cloth = np.array(load_image("/workspace1/pdawson/tryon-finetune/wolfram/cargo.png"))
 target_ratio = size[1] / size[0]
 current_ratio = test_cloth.shape[0] / test_cloth.shape[1]
@@ -57,6 +58,8 @@ model_prompt = "Man in front of a clean white background"
 prompt_detailed = create_prompt(model_prompt, cloth_prompt)
 #prompt_detailed = prompt_generic
 print(prompt_detailed)
+
+
 
 result = pipe(
         prompt=prompt_generic,

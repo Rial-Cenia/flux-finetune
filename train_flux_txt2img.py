@@ -25,6 +25,9 @@ import shutil
 import warnings
 from contextlib import nullcontext
 from pathlib import Path
+import sys
+#print(sys.executable)
+#print(sys.path)
 
 import numpy as np
 import torch
@@ -38,16 +41,15 @@ from huggingface_hub.utils import insecure_hashlib
 from PIL import Image
 from PIL.ImageOps import exif_transpose
 from torch.utils.data import Dataset
-from torchvision import transforms
-from torchvision.transforms.functional import crop
+#from torchvision.transforms.functional import crop
 from tqdm.auto import tqdm
-from transformers import CLIPTextModelWithProjection, CLIPTokenizer, PretrainedConfig, T5EncoderModel, T5TokenizerFast
+from transformers import CLIPTextModelWithProjection, CLIPVisionModelWithProjection, PretrainedConfig, T5EncoderModel, T5TokenizerFast, CLIPImageProcessor
 from image_datasets.cp_dataset import VitonHDDataset
 from paser_helper import parse_args
 from src.flux.train_utils import  prepare_latents, encode_images_to_latents
 from diffusers import FluxTransformer2DModel, FluxPipeline
 from flux_context_pipeline import FluxContextImg2ImgPipeline
-from diffusers.image_processor import VaeImageProcessor
+#from diffusers.image_processor import VaeImageProcessor
 from deepspeed.runtime.engine import DeepSpeedEngine
 
 import diffusers
@@ -65,6 +67,7 @@ from diffusers.utils import (
 from diffusers.utils.hub_utils import load_or_create_model_card, populate_model_card
 from diffusers.utils.torch_utils import is_compiled_module
 
+import torch.nn.functional as F
 
 if is_wandb_available():
     import wandb
@@ -182,28 +185,27 @@ def log_validation(
         for batch in dataloader:
             
             prompt_detailed = batch['prompt']
-            
-            prompt_generic = [""
-                f"The pair of images highlights a garment and its styling on a model; "
-                f"[IMAGE1] Detailed product shot of a garment"
-                f"[IMAGE2] The same garment is worn by a model."
-            ] * len(batch['image'])
+            #prompt_generic = [""
+           #     f"The pair of images highlights a clothing and its styling on a model, high resolution, 4K, 8K; "
+           #     f"[IMAGE1] Detailed product shot of a clothing"
+           #     f"[IMAGE2] The same cloth is worn by a model."
+            #] * len(batch['image'])
+            prompt_generic = prompt_detailed
 
-            control_image = batch['image']             
-        
+            control_image = batch['image']        
             height = args.height
             width = args.width*2
             
             result = pipeline(
-                prompt=prompt_detailed,
+                prompt=prompt_generic,
                 prompt_2=prompt_detailed,
                 height=height,
                 width=width,
                 image=control_image,
-                num_inference_steps=35,
+                num_inference_steps=30,
                 generator=generator,
-                guidance_scale=5,
-                strength=1.0
+                guidance_scale=3.5,
+                strength=1.0,
             ).images
             
             images.extend(result)
@@ -364,7 +366,7 @@ def encode_prompt(
     prompt_2 = [prompt_2] if isinstance(prompt_2, str) else prompt_2
 
     dtype = text_encoders[0].dtype
-    device = device if device is not None else text_encoders[1].device
+    device = device if device is not None else text_encoders[0].device
     
     pooled_prompt_embeds = _encode_prompt_with_clip(
         text_encoder=text_encoders[0],
@@ -376,8 +378,8 @@ def encode_prompt(
     )
 
     prompt_embeds = _encode_prompt_with_t5(
-        text_encoder=text_encoders[1],
-        tokenizer=tokenizers[1],
+        text_encoder=text_encoders[0],
+        tokenizer=tokenizers[0],
         max_sequence_length=max_sequence_length,
         prompt=prompt_2,
         num_images_per_prompt=num_images_per_prompt,
@@ -478,6 +480,7 @@ def main(args):
     )
     noise_scheduler_copy = copy.deepcopy(noise_scheduler)
     text_encoder_one, text_encoder_two = load_text_encoders(text_encoder_cls_one, text_encoder_cls_two)
+
     vae = AutoencoderKL.from_pretrained(
         args.pretrained_model_name_or_path,
         subfolder="vae",
@@ -488,28 +491,21 @@ def main(args):
     vae_scale_factor = (
         2 ** (len(vae.config.block_out_channels) - 1) if vae is not None else 8
     )
-    #image_processor = VaeImageProcessor(vae_scale_factor=vae_scale_factor, do_resize=True, do_convert_rgb=True, do_normalize=True)
+    # Image encoders para la prenda
+    #image_processor = VaeImageProcessor(vae_scale_factor=vae_scale_factor)
+    vit_processing = CLIPImageProcessor(do_rescale=False)
+    image_encoder_large = CLIPVisionModelWithProjection.from_pretrained("openai/clip-vit-large-patch14").to(accelerator.device)
+    image_encoder_large.requires_grad_(False)
+
     transformer = FluxTransformer2DModel.from_pretrained(
         args.pretrained_model_name_or_path, revision=args.revision, variant=args.variant, subfolder="transformer"
     )
 
     transformer.requires_grad_(False)
     vae.requires_grad_(False)
-    text_encoder_one.requires_grad_(False)
+    #text_encoder_one.requires_grad_(False)
     text_encoder_two.requires_grad_(False)
     
-    vital_grad_params = [
-        "transformer_blocks.0.",
-        "transformer_blocks.1.",
-        "transformer_blocks.17.",
-        "transformer_blocks.18.",
-        "single_transformer_blocks.6.",
-        "single_transformer_blocks.9.",
-        "single_transformer_blocks.34.",
-        "single_transformer_blocks.35.",
-        "single_transformer_blocks.37.",
-    ]
-
     grad_params = [
         "transformer_blocks.0.",
         "transformer_blocks.1.",
@@ -572,11 +568,11 @@ def main(args):
         transformer.requires_grad_(False)  # Set all parameters to not require gradients by default
         
         for name, param in transformer.named_parameters():
-            if any(grad_param in name for grad_param in vital_grad_params):
+            if any(grad_param in name for grad_param in grad_params):
                 if ("attn" in name):
                     param.requires_grad = True
                     print(f"Enabling gradients for: {name}")
-        
+    
     else:
         transformer.requires_grad_(False)   
 
@@ -608,7 +604,7 @@ def main(args):
         )
 
     vae.to(accelerator.device, dtype=weight_dtype)
-    text_encoder_one.to(accelerator.device, dtype=weight_dtype)
+    #text_encoder_one.to(accelerator.device, dtype=weight_dtype)
     text_encoder_two.to(accelerator.device, dtype=weight_dtype)
     transformer.to(accelerator.device, dtype=weight_dtype)
 
@@ -803,11 +799,33 @@ def main(args):
             prompt_embeds, pooled_prompt_embeds, text_ids = encode_prompt(
                 text_encoders, tokenizers, prompt, prompt_2, args.max_sequence_length
             )
+            prompt_embeds, text_ids = encode_prompt(
+                text_encoders, tokenizers, prompt_2, args.max_sequence_length
+            )
             prompt_embeds = prompt_embeds.to(accelerator.device)
             pooled_prompt_embeds = pooled_prompt_embeds.to(accelerator.device)
             text_ids = text_ids.to(accelerator.device)
+
         return prompt_embeds, pooled_prompt_embeds, text_ids
 
+    def _get_clip_image_embeds(cloth, num_images_per_prompt):
+        image_embeds_large = image_encoder_large(cloth, output_hidden_states=False).image_embeds
+        image_embeds = image_embeds_large.repeat(1, num_images_per_prompt)
+        image_embeds = image_embeds_large.view(1 * num_images_per_prompt, -1)
+        return image_embeds
+
+    def compute_image_embeddings(images):
+        with torch.no_grad():
+            #images = images.to(vit_processing.dtype)
+            cloth_image_vit = vit_processing(images=images, return_tensors="pt").data['pixel_values']
+            cloth_image_vit = cloth_image_vit.to(accelerator.device)
+            num_images_per_prompt = 1
+            cloth_image_embeds = _get_clip_image_embeds(cloth_image_vit, num_images_per_prompt)
+            cloth_image_embeds = cloth_image_embeds.to(device=accelerator.device, dtype=vae.dtype)
+            cloth_image_embeds = cloth_image_embeds.repeat(num_images_per_prompt, *([1] * (cloth_image_embeds.dim() - 1)))
+        
+        return cloth_image_embeds
+    
     # If no type of tuning is done on the text_encoder and custom instance prompts are NOT
     # provided (i.e. the --instance_prompt is used for all images), we encode the instance prompt once to avoid
     # the redundant encoding.
@@ -840,8 +858,6 @@ def main(args):
         transformer, optimizer, train_dataloader, lr_scheduler = accelerator.prepare(
             transformer, optimizer, train_dataloader, lr_scheduler
         )
-
-    
 
     # We need to recalculate our total training steps as the size of the training dataloader may have changed.
     num_update_steps_per_epoch = math.ceil(len(train_dataloader) / args.gradient_accumulation_steps)
@@ -936,23 +952,21 @@ def main(args):
 
                 prompts_specific = batch["prompt"]
                 #prompts_generic = [""
-                #    f"The pair of images highlights a garment and its styling on a model; "
-                #    f"[IMAGE1] Detailed product shot of a garment;"
-                #    f"[IMAGE2] The same garment is worn by a model;"
-                #] * len(pixel_values)
+               #     f"The pair of images highlights a garment and its styling on a model; "
+              #      f"[IMAGE1] Detailed product shot of a garment;"
+              #      f"[IMAGE2] The same cloth is worn by a model;"
+              #  ] * len(pixel_values)
+                prompts_generic = prompts_specific
 
-                # 20% de las veces, tener un prompt vacío
-                if random.random() < 0.2:
-                    prompts_specific = [""] * len(prompts_specific)
-
-                garment_image = batch["cloth_pure"]
-                garment_image = garment_image.to(dtype=vae.dtype)
-                
+                #garment_image = batch["cloth_pure_01"]                                
                 # encode batch prompts when custom prompts are provided for each image -
                 prompt_embeds, pooled_prompt_embeds, text_ids = compute_text_embeddings(
-                    prompts_specific, prompts_specific, text_encoders, tokenizers
+                    prompts_generic, prompts_specific, text_encoders, tokenizers
                 )
-                
+
+                prompt_embeds, text_ids = compute_text_embeddings(
+                    prompts_specific, text_encoders, tokenizers
+                )
                 
                 # TODO: controlnet dropout might cause instability, need to run more experiments
                 #if args.dropout_prob > 0:
@@ -1031,12 +1045,21 @@ def main(args):
                 # and instead post-weight the loss
                 weighting = compute_loss_weighting_for_sd3(weighting_scheme=args.weighting_scheme, sigmas=sigmas)
 
+                # Loss masking
+                #loss_mask = torch.ones((1,1,model_pred.shape[2],model_pred.shape[3]), device=accelerator.device)
+                loss_mask = batch["loss_mask"].to(dtype=vae.dtype)
+                # Latent size
+                loss_mask = F.interpolate(loss_mask, size=(model_pred.shape[2], model_pred.shape[3]), mode='nearest')
+                
+                width = model_pred.shape[3] // 2
+                loss_mask[:, :, :, :width] = 0.1
+                
                 # flow matching loss
                 target = noise - model_input
 
                 # Compute regular loss.
                 loss = torch.mean(
-                    (weighting.float() * (model_pred.float() - target.float()) ** 2).reshape(target.shape[0], -1),
+                    (loss_mask.float()*weighting.float() * (model_pred.float() - target.float()) ** 2).reshape(target.shape[0], -1),
                     1,
                 )
                 loss = loss.mean()
@@ -1098,6 +1121,7 @@ def main(args):
                         tokenizer_2=tokenizer_two,
                         text_encoder=text_encoder_one,
                         text_encoder_2=text_encoder_two,
+                        image_encoder_large = image_encoder_large,
                     )
                     
                     log_validation(
