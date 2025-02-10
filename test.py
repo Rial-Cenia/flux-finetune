@@ -6,9 +6,11 @@ import numpy as np
 from PIL import Image
 
 def create_prompt(model_prompt, cloth_prompt):
+
     prompt = f"The pair of images highlights a garment and its styling on a model; "
     prompt += f"[IMAGE1] {cloth_prompt};"
     prompt += f"[IMAGE2] {model_prompt};"
+
     return prompt
 
 prompt_generic = f"The pair of images highlights a garment and its styling on a model; [IMAGE1] Detailed product shot of a garment; [IMAGE2] The same cloth is worn by a model;"
@@ -25,11 +27,7 @@ pipe = FluxContextImg2ImgPipeline.from_pretrained(
                         transformer = transformer,
                         torch_dtype=weight_dtype).to(device)
 
-#pipe.load_lora_weights('sebapulgar/dinho_lora', weight_name='lora.safetensors')
-
-print("pipe loaded fine bro")
-
-size = (768, 1024)
+test_cloth = load_image("/workspace1/pdawson/tryon-scraping/dataset/test/cloth/d80d5841899a4eb8850a8a7a6df901de32cf51c5.jpg")
 
 test_cloth = np.array(load_image("/workspace1/pdawson/tryon-finetune/wolfram/cargo.png"))
 target_ratio = size[1] / size[0]

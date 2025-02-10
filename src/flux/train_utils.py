@@ -1,5 +1,5 @@
 import torch
-from einops import rearrange
+#from einops import rearrange
 
 def prepare_image_with_mask(
         image_processor,
