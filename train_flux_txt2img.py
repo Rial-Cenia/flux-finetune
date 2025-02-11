@@ -43,7 +43,7 @@ from PIL.ImageOps import exif_transpose
 from torch.utils.data import Dataset
 #from torchvision.transforms.functional import crop
 from tqdm.auto import tqdm
-from transformers import CLIPTextModelWithProjection, CLIPVisionModelWithProjection, PretrainedConfig, T5EncoderModel, T5TokenizerFast, CLIPImageProcessor
+from transformers import CLIPTextModelWithProjection, CLIPTokenizer, PretrainedConfig, T5EncoderModel, T5TokenizerFast
 from image_datasets.cp_dataset import VitonHDDataset
 from paser_helper import parse_args
 from src.flux.train_utils import  prepare_latents, encode_images_to_latents
@@ -378,8 +378,8 @@ def encode_prompt(
     )
 
     prompt_embeds = _encode_prompt_with_t5(
-        text_encoder=text_encoders[0],
-        tokenizer=tokenizers[0],
+        text_encoder=text_encoders[1],
+        tokenizer=tokenizers[1],
         max_sequence_length=max_sequence_length,
         prompt=prompt_2,
         num_images_per_prompt=num_images_per_prompt,
@@ -493,9 +493,9 @@ def main(args):
     )
     # Image encoders para la prenda
     #image_processor = VaeImageProcessor(vae_scale_factor=vae_scale_factor)
-    vit_processing = CLIPImageProcessor(do_rescale=False)
-    image_encoder_large = CLIPVisionModelWithProjection.from_pretrained("openai/clip-vit-large-patch14").to(accelerator.device)
-    image_encoder_large.requires_grad_(False)
+    #vit_processing = CLIPImageProcessor(do_rescale=False)
+    #image_encoder_large = CLIPVisionModelWithProjection.from_pretrained("openai/clip-vit-large-patch14").to(accelerator.device)
+    #image_encoder_large.requires_grad_(False)
 
     transformer = FluxTransformer2DModel.from_pretrained(
         args.pretrained_model_name_or_path, revision=args.revision, variant=args.variant, subfolder="transformer"
@@ -503,9 +503,22 @@ def main(args):
 
     transformer.requires_grad_(False)
     vae.requires_grad_(False)
-    #text_encoder_one.requires_grad_(False)
+    
+    text_encoder_one.requires_grad_(False)
     text_encoder_two.requires_grad_(False)
     
+    vital_grad_params = [
+        "transformer_blocks.0.",
+        "transformer_blocks.1.",
+        "transformer_blocks.17.",
+        "transformer_blocks.18.",
+        "single_transformer_blocks.6.",
+        "single_transformer_blocks.9.",
+        "single_transformer_blocks.34.",
+        "single_transformer_blocks.35.",
+        "single_transformer_blocks.37.",
+    ]
+
     grad_params = [
         "transformer_blocks.0.",
         "transformer_blocks.1.",
@@ -568,11 +581,10 @@ def main(args):
         transformer.requires_grad_(False)  # Set all parameters to not require gradients by default
         
         for name, param in transformer.named_parameters():
-            if any(grad_param in name for grad_param in grad_params):
+            if any(grad_param in name for grad_param in vital_grad_params):
                 if ("attn" in name):
                     param.requires_grad = True
                     print(f"Enabling gradients for: {name}")
-    
     else:
         transformer.requires_grad_(False)   
 
@@ -604,7 +616,7 @@ def main(args):
         )
 
     vae.to(accelerator.device, dtype=weight_dtype)
-    #text_encoder_one.to(accelerator.device, dtype=weight_dtype)
+    text_encoder_one.to(accelerator.device, dtype=weight_dtype)
     text_encoder_two.to(accelerator.device, dtype=weight_dtype)
     transformer.to(accelerator.device, dtype=weight_dtype)
 
@@ -808,23 +820,6 @@ def main(args):
 
         return prompt_embeds, pooled_prompt_embeds, text_ids
 
-    def _get_clip_image_embeds(cloth, num_images_per_prompt):
-        image_embeds_large = image_encoder_large(cloth, output_hidden_states=False).image_embeds
-        image_embeds = image_embeds_large.repeat(1, num_images_per_prompt)
-        image_embeds = image_embeds_large.view(1 * num_images_per_prompt, -1)
-        return image_embeds
-
-    def compute_image_embeddings(images):
-        with torch.no_grad():
-            #images = images.to(vit_processing.dtype)
-            cloth_image_vit = vit_processing(images=images, return_tensors="pt").data['pixel_values']
-            cloth_image_vit = cloth_image_vit.to(accelerator.device)
-            num_images_per_prompt = 1
-            cloth_image_embeds = _get_clip_image_embeds(cloth_image_vit, num_images_per_prompt)
-            cloth_image_embeds = cloth_image_embeds.to(device=accelerator.device, dtype=vae.dtype)
-            cloth_image_embeds = cloth_image_embeds.repeat(num_images_per_prompt, *([1] * (cloth_image_embeds.dim() - 1)))
-        
-        return cloth_image_embeds
     
     # If no type of tuning is done on the text_encoder and custom instance prompts are NOT
     # provided (i.e. the --instance_prompt is used for all images), we encode the instance prompt once to avoid
@@ -1121,7 +1116,6 @@ def main(args):
                         tokenizer_2=tokenizer_two,
                         text_encoder=text_encoder_one,
                         text_encoder_2=text_encoder_two,
-                        image_encoder_large = image_encoder_large,
                     )
                     
                     log_validation(

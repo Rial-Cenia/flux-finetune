@@ -50,6 +50,14 @@ def create_prompt(model_prompt, cloth_prompt):
 
     return prompt
 
+def create_prompt_generic(model_prompt, cloth_prompt):
+
+    prompt = f"The pair of images highlights a garment and its styling on a model; "
+    prompt += f"[IMAGE1] Detailed photo of a garment;"
+    prompt += f"[IMAGE2] {model_prompt}. The person is wearing the garment;"
+
+    return prompt
+
 
 class VitonHDDataset(data.Dataset):
     def __init__(
@@ -58,8 +66,7 @@ class VitonHDDataset(data.Dataset):
         phase: Literal["train", "test"],
         order: Literal["paired", "unpaired"] = "paired",
         size: Tuple[int, int] = (512, 384),
-        data_list: Optional[str] = None,
-        captions_path: Optional[str] = None,
+        data_list: Optional[str] = None
     ):
         super(VitonHDDataset, self).__init__()
         self.dataroot = dataroot_path
@@ -67,7 +74,6 @@ class VitonHDDataset(data.Dataset):
         self.height = size[0]
         self.width = size[1]
         self.size = size
-        self.caption_path = captions_path
         # This code defines a transformation pipeline for image processing
         self.transform = transforms.Compose(
             [
@@ -79,6 +85,12 @@ class VitonHDDataset(data.Dataset):
                 transforms.Normalize([0.5], [0.5]),
             ]
         )
+        self.cloth_transform = transforms.Compose(
+            [
+            transforms.ToTensor()
+            ]
+        )
+
         self.toTensor = transforms.ToTensor()
 
         self.order = order
@@ -115,6 +127,7 @@ class VitonHDDataset(data.Dataset):
         # Cloth image
         cloth = Image.open(os.path.join(self.dataroot, self.phase, "cloth", c_name)).resize((self.width,self.height))
         cloth_pure = self.transform(cloth)
+        cloth_pure_01 = self.cloth_transform(cloth)
         
         # Model image
         im_pil_big = Image.open(
@@ -126,18 +139,35 @@ class VitonHDDataset(data.Dataset):
         cloth_prompt = open(os.path.join(self.dataroot, self.phase, "cloth", c_name + ".txt")).read()
         image_prompt = open(os.path.join(self.dataroot, self.phase, "image", im_name + ".txt")).read()
         prompt = create_prompt(image_prompt, cloth_prompt)
+        #prompt = create_prompt_generic(image_prompt, cloth_prompt)
 
         # Inpaint mask
         garment_mask = torch.zeros_like(cloth_pure)
         full_mask = torch.cat([garment_mask, 1.0-garment_mask], dim=2) # Full screen "inpaint"
+
+        # Loss mask
+        loss_mask = torch.ones(1, self.height, self.width*2)
+        loss_mask[:, :, :self.width] = 0
+
+        if (os.path.exists(os.path.join(self.dataroot, self.phase, "mask", im_name))):
+            empty_mask = torch.zeros(1, self.height, self.width)
+            mask = Image.open(os.path.join(self.dataroot, self.phase, "mask", im_name)).resize((self.width,self.height)).convert("L")
+            mask = self.toTensor(mask)
+            mask = (mask > 0.5).float()
+            mask = torch.cat([empty_mask, mask], dim=2)
+            loss_mask = mask
+
+        loss_mask = torch.clamp(loss_mask, 0.6, 1)
         
         # Save all
         result = {}
         result["inpaint_mask"] = full_mask
         result["c_name"] = c_name
         result["im_name"] = im_name
-        result["cloth_pure"] = cloth_pure
+        #result["cloth_pure"] = cloth_pure
         result["prompt"] = prompt
+        result["loss_mask"] = loss_mask
+        result["cloth_pure_01"] = cloth_pure_01
         
         # Concatenate image and garment along width dimension
         inpaint_image = torch.cat([cloth_pure, torch.zeros_like(cloth_pure)], dim=2)  # dim=2 is width dimension
@@ -154,8 +184,8 @@ class VitonHDDataset(data.Dataset):
 
 
 if __name__ == "__main__":
-    dataset = VitonHDDataset("/workspace1/pdawson/tryon-scraping/dataset", "test", 
-                             "unpaired", (512,384), "test_pairs.txt")
+    dataset = VitonHDDataset("/workspace1/pdawson/tryon-scraping/dataset2", "train", 
+                             "unpaired", (768,512), "train_pairs.txt")
     
     loader = DataLoader(dataset, batch_size=1, shuffle=True, num_workers=1)
     for data in loader:
