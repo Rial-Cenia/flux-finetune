@@ -26,9 +26,6 @@ import warnings
 from contextlib import nullcontext
 from pathlib import Path
 import sys
-#print(sys.executable)
-#print(sys.path)
-
 import numpy as np
 import torch
 import torch.utils.checkpoint
@@ -41,7 +38,6 @@ from huggingface_hub.utils import insecure_hashlib
 from PIL import Image
 from PIL.ImageOps import exif_transpose
 from torch.utils.data import Dataset
-#from torchvision.transforms.functional import crop
 from tqdm.auto import tqdm
 from transformers import CLIPTextModelWithProjection, CLIPTokenizer, PretrainedConfig, T5EncoderModel, T5TokenizerFast
 from image_datasets.cp_dataset import VitonHDDataset, HMDataset
@@ -1021,6 +1017,10 @@ def main(args):
                 # zt = (1 - texp) * x + texp * z1
                 sigmas = get_sigmas(timesteps, n_dim=model_input.ndim, dtype=model_input.dtype)
                 noisy_model_input = (1.0 - sigmas) * model_input + sigmas * noise
+
+                # NEW: Keep condition latents clean
+                actual_width = noisy_model_input.shape[3]
+                noisy_model_input[:, :, :, :actual_width//2] = model_input[:, :, :, :actual_width//2]
 
                 packed_noisy_model_input = FluxPipeline._pack_latents(
                     noisy_model_input,

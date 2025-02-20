@@ -323,6 +323,9 @@ def prepare_latent_image_ids(batch_size, height, width, device, dtype):
     latent_image_ids[..., 2] = (
         latent_image_ids[..., 2] + torch.arange(width // 2)[None, :]
     )
+    # NEW: Set the condition area on the first channel
+    # Question: What magnitude to use. Could be 1, or similar to the max value
+    latent_image_ids[:, :width//4, 0] = height // 4
 
     (
         latent_image_id_height,

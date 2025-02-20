@@ -864,7 +864,7 @@ class FluxContextImg2ImgPipeline(DiffusionPipeline, FluxLoraLoaderMixin, FromSin
         else:
             latents = self._unpack_latents(latents, height, width, self.vae_scale_factor)
             latents = (latents / self.vae.config.scaling_factor) + self.vae.config.shift_factor
-            image = self.vae.decode(latents, return_dict=False)[0]
+            image = self.vae.decode(latents.to(dtype=prompt_embeds.dtype), return_dict=False)[0]
             image = self.image_processor.postprocess(image, output_type=output_type)
 
         # Offload all models

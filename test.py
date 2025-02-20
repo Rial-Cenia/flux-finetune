@@ -15,12 +15,15 @@ def create_prompt(model_prompt, cloth_prompt):
 
 prompt_generic = f"The pair of images highlights a garment and its styling on a model; [IMAGE1] Detailed product shot of a garment; [IMAGE2] The same cloth is worn by a model;"
                 
-device = "cuda:4"
+device = "cuda:6"
 weight_dtype = torch.bfloat16
 
 transformer = FluxTransformer2DModel.from_pretrained(
-    "/workspace1/pdawson/tryon-finetune/trained-flux-txt2img/checkpoint-13000", subfolder="transformer", torch_dtype=weight_dtype
+    "/workspace1/pdawson/tryon-finetune/trained-flux-txt2img/checkpoint-15000", subfolder="transformer", torch_dtype=weight_dtype
 )
+
+# push to hubs
+transformer.push_to_hub("RIAL-AI/txt2img-tryon-15k")
 
 pipe = FluxContextImg2ImgPipeline.from_pretrained(
                         "black-forest-labs/FLUX.1-dev",  # model

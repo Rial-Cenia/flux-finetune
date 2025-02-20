@@ -26,9 +26,6 @@ import warnings
 from contextlib import nullcontext
 from pathlib import Path
 import sys
-#print(sys.executable)
-#print(sys.path)
-
 import numpy as np
 import torch
 import torch.utils.checkpoint
@@ -41,16 +38,18 @@ from huggingface_hub.utils import insecure_hashlib
 from PIL import Image
 from PIL.ImageOps import exif_transpose
 from torch.utils.data import Dataset
-#from torchvision.transforms.functional import crop
 from tqdm.auto import tqdm
 from transformers import CLIPTextModelWithProjection, CLIPTokenizer, PretrainedConfig, T5EncoderModel, T5TokenizerFast
-from image_datasets.cp_dataset import VitonHDDataset, HMDataset
+from image_datasets.cp_dataset import HMDataset
 from paser_helper import parse_args
 from src.flux.train_utils import  prepare_latents, encode_images_to_latents
-from diffusers import FluxTransformer2DModel, FluxPipeline
-from flux_context_pipeline import FluxContextImg2ImgPipeline
-#from diffusers.image_processor import VaeImageProcessor
+from diffusers import FluxPipeline
+from flux_tryon_pipeline import FluxTryonPipeline
+from diffusers.image_processor import VaeImageProcessor
 from deepspeed.runtime.engine import DeepSpeedEngine
+
+from transformer_garm import FluxTransformerGarmModel
+from transformer_gen import FluxTransformerGenModel
 
 import diffusers
 from diffusers import (
@@ -171,7 +170,6 @@ def log_validation(
     )
 
     pipeline = pipeline.to(accelerator.device)
-    # pipeline.set_progress_bar_config(disable=True)
 
     # run inference
     generator = torch.Generator(device=accelerator.device).manual_seed(args.seed) if args.seed else None
@@ -184,26 +182,26 @@ def log_validation(
         control_images = []
         for batch in dataloader:
             
-            prompt = batch['prompt']
-
+            cloth_prompt = batch['cloth_prompt']
+            image_prompt = [img_p + ". Wearing a " + cl_p for img_p, cl_p in zip(batch['image_prompt'], batch['cloth_prompt'])]
+            cloth_image = batch["cloth_pure_01"]
             control_image = batch['image']        
             height = args.height
-            width = args.width*2
+            width = args.width
             
             result = pipeline(
-                prompt=prompt,
-                prompt_2=prompt,
+                prompt=image_prompt,
+                garm_prompt=cloth_prompt,
+                cloth_image=cloth_image,
                 height=height,
                 width=width,
-                image=control_image,
                 num_inference_steps=30,
                 generator=generator,
                 guidance_scale=3.5,
-                strength=1.0,
             ).images
             
             images.extend(result)
-            prompts.extend(prompt)
+            prompts.extend(image_prompt)
             control_images.extend(control_image)
 
     for tracker in accelerator.trackers:
@@ -486,16 +484,34 @@ def main(args):
         2 ** (len(vae.config.block_out_channels) - 1) if vae is not None else 8
     )
     # Image encoders para la prenda
-    #image_processor = VaeImageProcessor(vae_scale_factor=vae_scale_factor)
-    #vit_processing = CLIPImageProcessor(do_rescale=False)
-    #image_encoder_large = CLIPVisionModelWithProjection.from_pretrained("openai/clip-vit-large-patch14").to(accelerator.device)
-    #image_encoder_large.requires_grad_(False)
+    image_processor = VaeImageProcessor(vae_scale_factor=vae_scale_factor * 2)
 
-    transformer = FluxTransformer2DModel.from_pretrained(
+    # For mixed precision training we cast all non-trainable weights (vae, text_encoder and transformer) to half-precision
+    # as these weights are only used for inference, keeping weights in full precision is not required.
+    weight_dtype = torch.float32
+    if accelerator.mixed_precision == "fp16":
+        weight_dtype = torch.float16
+    elif accelerator.mixed_precision == "bf16":
+        weight_dtype = torch.bfloat16
+    if torch.backends.mps.is_available() and weight_dtype == torch.bfloat16:
+        # due to pytorch#99272, MPS does not yet support bfloat16.
+        raise ValueError(
+            "Mixed precision training with bfloat16 is not supported on MPS. Please use fp16 (recommended) or fp32 instead."
+        )
+
+    # Transformer 1 - Saca las features de la prenda
+    transformer_garm = FluxTransformerGarmModel.from_pretrained(
+        args.pretrained_model_name_or_path, revision=args.revision, variant=args.variant, subfolder="transformer",
+        torch_dtype=weight_dtype
+    )
+
+    # Transformer 2 - Genera la imagen, ocupando features anteriores
+    transformer = FluxTransformerGenModel.from_pretrained(
         args.pretrained_model_name_or_path, revision=args.revision, variant=args.variant, subfolder="transformer"
     )
 
     transformer.requires_grad_(False)
+    transformer_garm.requires_grad_(False)
     vae.requires_grad_(False)
     
     if args.train_text_encoder:
@@ -504,6 +520,7 @@ def main(args):
     else:
         text_encoder_one.requires_grad_(False)
         text_encoder_two.requires_grad_(False)
+
 
     grad_params = [
         "transformer_blocks.0.",
@@ -576,23 +593,8 @@ def main(args):
     
     print(sum([p.numel() for p in transformer.parameters() if p.requires_grad]) / 1000000, 'transformer parameters')
 
-    print(sum([p.numel() for p in text_encoder_one.parameters() if p.requires_grad]) / 1000000, 'text_encoder_one parameters')
-
-    # For mixed precision training we cast all non-trainable weights (vae, text_encoder and transformer) to half-precision
-    # as these weights are only used for inference, keeping weights in full precision is not required.
-    weight_dtype = torch.float32
-    if accelerator.mixed_precision == "fp16":
-        weight_dtype = torch.float16
-    elif accelerator.mixed_precision == "bf16":
-        weight_dtype = torch.bfloat16
-    if torch.backends.mps.is_available() and weight_dtype == torch.bfloat16:
-        # due to pytorch#99272, MPS does not yet support bfloat16.
-        raise ValueError(
-            "Mixed precision training with bfloat16 is not supported on MPS. Please use fp16 (recommended) or fp32 instead."
-        )
-
     vae.to(accelerator.device, dtype=weight_dtype)
-    #transformer.to(accelerator.device, dtype=weight_dtype)
+    transformer_garm.to(accelerator.device, dtype=weight_dtype)
 
     if not args.train_text_encoder:
         text_encoder_one.to(accelerator.device, dtype=weight_dtype)
@@ -604,7 +606,6 @@ def main(args):
             transformer.enable_gradient_checkpointing()
             if args.train_text_encoder:
                 text_encoder_one.gradient_checkpointing_enable()
-        
 
     def unwrap_model(model):
         model = accelerator.unwrap_model(model)
@@ -618,8 +619,10 @@ def main(args):
                 if isinstance(model, DeepSpeedEngine):
                     # For DeepSpeed models, we need to get the underlying model
                     model = model.module
-                if isinstance(unwrap_model(model), FluxTransformer2DModel):
+                if isinstance(unwrap_model(model), FluxTransformerGenModel):
                     unwrap_model(model).save_pretrained(os.path.join(output_dir, "transformer"))
+                elif isinstance(unwrap_model(model), FluxTransformerGarmModel):
+                    unwrap_model(model).save_pretrained(os.path.join(output_dir, "transformer_garm"))
                 elif isinstance(unwrap_model(model), (CLIPTextModelWithProjection, T5EncoderModel)):
                     if isinstance(unwrap_model(model), CLIPTextModelWithProjection):
                         unwrap_model(model).save_pretrained(os.path.join(output_dir, "text_encoder"))
@@ -640,10 +643,13 @@ def main(args):
             model = models.pop()
 
             # load diffusers style into model
-            if isinstance(unwrap_model(model), FluxTransformer2DModel):
-                load_model = FluxTransformer2DModel.from_pretrained(input_dir, subfolder="transformer")
+            if isinstance(unwrap_model(model), FluxTransformerGenModel):
+                load_model = FluxTransformerGenModel.from_pretrained(input_dir, subfolder="transformer")
                 model.register_to_config(**load_model.config)
-
+                model.load_state_dict(load_model.state_dict())
+            elif isinstance(unwrap_model(model), FluxTransformerGarmModel):
+                load_model = FluxTransformerGarmModel.from_pretrained(input_dir, subfolder="transformer_garm")
+                model.register_to_config(**load_model.config)
                 model.load_state_dict(load_model.state_dict())
             elif isinstance(unwrap_model(model), (CLIPTextModelWithProjection, T5EncoderModel)):
                 try:
@@ -956,33 +962,38 @@ def main(args):
             
             with accelerator.accumulate(models_to_accumulate):
                 # vae_scale_factor = 2 ** (len(vae.config.block_out_channels))
-                batch_size = batch["image"].shape[0]
-
-                # Contiene garment y imagen GT de modelo concatenada
-                pixel_values = batch["image"].to(dtype=vae.dtype)
-
-                # Dropout
-                if random.random() < 0.3:
-                    prompt = [""] * batch_size
+                batch_size = batch["model_image"].shape[0]
+                pixel_values = batch["model_image"].to(dtype=vae.dtype)
+                cloth_pixel_values = batch["cloth_pure"].to(dtype=vae.dtype)
+            
+                if random.random() < 0.25:
+                    cloth_prompt = batch["cloth_prompt"]
+                    image_prompt = [""] * batch_size
                 else:
-                    prompt = batch["prompt"]
+                    cloth_prompt = batch["cloth_prompt"]
+                    image_prompt = [img_p + ". Wearing a " + cl_p for img_p, cl_p in zip(batch['image_prompt'], batch['cloth_prompt'])]
                 
                 if not args.train_text_encoder:
+                    # Prompts para ambos transformer
                     prompt_embeds, pooled_prompt_embeds, text_ids = compute_text_embeddings(
-                        prompt, prompt, text_encoders, tokenizers
+                        image_prompt, image_prompt, text_encoders, tokenizers
                     )
+                    cloth_prompt_embeds, cloth_pooled_prompt_embeds, cloth_text_ids = compute_text_embeddings(
+                        cloth_prompt, cloth_prompt, text_encoders, tokenizers
+                    )
+
                 else:
-                    tokens_one = tokenize_prompt(tokenizer_one, prompt, max_sequence_length=77)
+                    tokens_one = tokenize_prompt(tokenizer_one, prompts_generic, max_sequence_length=77)
                     tokens_two = tokenize_prompt(
-                        tokenizer_two, prompt, max_sequence_length=args.max_sequence_length
+                        tokenizer_two, prompts_generic, max_sequence_length=args.max_sequence_length
                     )
                     prompt_embeds, pooled_prompt_embeds, text_ids = encode_prompt(
                         text_encoders=[text_encoder_one, text_encoder_two],
                         tokenizers=[None, None],
                         text_input_ids_list=[tokens_one, tokens_two],
                         max_sequence_length=args.max_sequence_length,
-                        prompt=prompt,
-                        prompt_2=prompt,
+                        prompt=prompts_generic,
+                        prompt_2=prompts_specific,
                     )
                 
                 # TODO: controlnet dropout might cause instability, need to run more experiments
@@ -990,13 +1001,16 @@ def main(args):
                 #    dropout = torch.nn.Dropout(p=args.dropout_prob)
                 #    inpaint_cond = dropout(inpaint_cond)
 
-                model_input = encode_images_to_latents(vae, pixel_values, weight_dtype, args.height, args.width*2)
+                # Pasarlos a latentes
+                model_input = encode_images_to_latents(vae, pixel_values, weight_dtype, args.height, args.width)
+                cloth_model_input = encode_images_to_latents(vae, cloth_pixel_values, weight_dtype, args.height, args.width)
                 
+                # Sirve para ambos
                 latent_image_ids = prepare_latents(
                     vae_scale_factor,
                     batch_size,
                     args.height,
-                    args.width*2,
+                    args.width,
                     weight_dtype,
                     accelerator.device,
                 )
@@ -1029,12 +1043,37 @@ def main(args):
                     height=model_input.shape[2],
                     width=model_input.shape[3],
                 )
+
+                packed_cloth_model_input = FluxPipeline._pack_latents(
+                    cloth_model_input,
+                    batch_size=cloth_model_input.shape[0],
+                    num_channels_latents=cloth_model_input.shape[1],
+                    height=cloth_model_input.shape[2],
+                    width=cloth_model_input.shape[3],
+                )
                 
                 # handle guidance
                 # guidance = torch.tensor([args.guidance_scale], device=accelerator.device)
                 guidance = torch.full([1], args.guidance_scale, device=accelerator.device)
                 guidance = guidance.expand(model_input.shape[0])
-                                
+
+                # NOTE: Hard coded guidance, could be wrong
+                #guidance_cloth = torch.full([1], 3.5, device=accelerator.device)
+                #guidance_cloth = guidance_cloth.expand(model_input.shape[0])
+                
+                # Sacar los features de la prenda (en el timestep 0) sin calcular gradientes
+                with torch.no_grad():
+                    _, ref_key, ref_value = transformer_garm(
+                            hidden_states=packed_cloth_model_input,
+                            timestep=timesteps*0,
+                            guidance=guidance,
+                            pooled_projections=cloth_pooled_prompt_embeds,
+                            encoder_hidden_states=cloth_prompt_embeds,
+                            txt_ids=cloth_text_ids,
+                            img_ids=latent_image_ids,
+                            return_dict=False,
+                        )
+                
                 # Predict the noise residual
                 model_pred = transformer(
                     hidden_states=packed_noisy_model_input,
@@ -1045,6 +1084,8 @@ def main(args):
                     encoder_hidden_states=prompt_embeds,
                     txt_ids=text_ids,
                     img_ids=latent_image_ids,
+                    ref_key=ref_key,
+                    ref_value=ref_value,
                     return_dict=False,
                 )[0]
                 
@@ -1054,29 +1095,20 @@ def main(args):
                 model_pred = FluxPipeline._unpack_latents(
                     model_pred,
                     height=args.height,
-                    width=args.width*2,
+                    width=args.width,
                     vae_scale_factor=vae_scale_factor,
                 )
 
                 # these weighting schemes use a uniform timestep sampling
                 # and instead post-weight the loss
                 weighting = compute_loss_weighting_for_sd3(weighting_scheme=args.weighting_scheme, sigmas=sigmas)
-
-                # Loss masking
-                #loss_mask = torch.ones((1,1,model_pred.shape[2],model_pred.shape[3]), device=accelerator.device)
-                loss_mask = batch["loss_mask"].to(dtype=vae.dtype)
-                # Latent size
-                loss_mask = F.interpolate(loss_mask, size=(model_pred.shape[2], model_pred.shape[3]), mode='nearest')
-                
-                #width = model_pred.shape[3] // 2
-                #loss_mask[:, :, :, :width] = 0.1
-                
+          
                 # flow matching loss
                 target = noise - model_input
 
                 # Compute regular loss.
                 loss = torch.mean(
-                    (loss_mask.float()*weighting.float() * (model_pred.float() - target.float()) ** 2).reshape(target.shape[0], -1),
+                    (weighting.float() * (model_pred.float() - target.float()) ** 2).reshape(target.shape[0], -1),
                     1,
                 )
                 loss = loss.mean()
@@ -1135,6 +1167,11 @@ def main(args):
                         text_encoder_one, text_encoder_two = load_text_encoders(text_encoder_cls_one, text_encoder_cls_two)
                         text_encoder_one.to(weight_dtype)
                         text_encoder_two.to(weight_dtype)
+                        #transformer_garm = FluxTransformerGarmModel.from_pretrained(
+                        #    args.pretrained_model_name_or_path, revision=args.revision, variant=args.variant, subfolder="transformer",
+                        #    torch_dtype=weight_dtype
+                        #).to(accelerator.device)
+                    
                     else:  # even when training the text encoder we're only training text encoder one
                         text_encoder_two = text_encoder_cls_two.from_pretrained(
                             args.pretrained_model_name_or_path,
@@ -1143,9 +1180,10 @@ def main(args):
                             variant=args.variant,
                         )
 
-                    pipeline = FluxContextImg2ImgPipeline.from_pretrained(
+                    pipeline = FluxTryonPipeline.from_pretrained(
                         args.pretrained_model_name_or_path,
                         transformer=accelerator.unwrap_model(transformer),
+                        transformer_garm = transformer_garm,
                         torch_dtype=weight_dtype,
                         vae=vae,
                         tokenizer=tokenizer_one,

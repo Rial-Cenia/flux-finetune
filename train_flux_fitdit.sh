@@ -1,18 +1,18 @@
 export MODEL_NAME="black-forest-labs/FLUX.1-dev"
 export INSTANCE_DIR="dog"
-export OUTPUT_DIR="trained-flux"
+export OUTPUT_DIR="trained-flux-fitdit2"
 
-CUDA_VISIBLE_DEVICES=6,7 accelerate launch --config_file accelerate_config.yaml --main_process_port 29700 train_flux_txt2img.py \
+CUDA_VISIBLE_DEVICES=6,7 accelerate launch --config_file accelerate_config.yaml --main_process_port 29200 train_flux_fitdit.py \
   --pretrained_model_name_or_path=$MODEL_NAME  \
   --instance_data_dir=$INSTANCE_DIR \
   --output_dir=$OUTPUT_DIR \
   --mixed_precision="bf16" \
   --train_batch_size=1 \
   --guidance_scale=1 \
-  --gradient_accumulation_steps=8 \
+  --gradient_accumulation_steps=1 \
   --optimizer="adamw" \
   --use_8bit_adam \
-  --learning_rate=5e-6 \
+  --learning_rate=3e-5 \
   --lr_scheduler="constant" \
   --lr_warmup_steps=0 \
   --max_train_steps=100000 \
@@ -31,4 +31,4 @@ CUDA_VISIBLE_DEVICES=6,7 accelerate launch --config_file accelerate_config.yaml 
   --report_to="wandb" \
   --train_base_model \
   --checkpoints_total_limit=3 \
- #--resume_from_checkpoint="/workspace1/pdawson/tryon-finetune/trained-flux-txt2img/checkpoint-7000"
+ #--resume_from_checkpoint="/workspace1/pdawson/tryon-finetune/trained-flux-fitdit/checkpoint-1000"
